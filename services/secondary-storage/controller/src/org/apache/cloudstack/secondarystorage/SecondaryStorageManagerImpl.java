@@ -167,7 +167,7 @@ import com.cloud.vm.dao.VMInstanceDao;
 // because sooner or later, it will be driven into Running state
 //
 public class SecondaryStorageManagerImpl extends ManagerBase implements SecondaryStorageVmManager, VirtualMachineGuru, SystemVmLoadScanHandler<Long>,
-        ResourceStateAdapter, Configurable {
+ResourceStateAdapter, Configurable {
     private static final Logger s_logger = Logger.getLogger(SecondaryStorageManagerImpl.class);
 
     private static final int DEFAULT_CAPACITY_SCAN_INTERVAL = 30000; // 30
@@ -260,6 +260,18 @@ public class SecondaryStorageManagerImpl extends ManagerBase implements Secondar
 
     private final GlobalLock _allocLock = GlobalLock.getInternLock(getAllocLockName());
 
+    private static final ConfigKey<String> SsvmTemplateXenServer = new ConfigKey<String>("Storage", String.class, "ssvm.template.xenserver", "SystemVM Template (XenServer)",
+            "Name of the SSVM template on Xenserver.", true);
+    private static final ConfigKey<String> SsvmTemplateKVM = new ConfigKey<String>("Storage", String.class, "ssvm.template.kvm", "SystemVM Template (KVM)",
+            "Name of the SSVM template on KVM.", true);
+    private static final ConfigKey<String> SsvmTemplateVMware = new ConfigKey<String>("Storage", String.class, "ssvm.template.vmware", "SystemVM Template (vSphere)",
+            "Name of the SSVM template on VMware.", true);
+    private static final ConfigKey<String> SsvmTemplateHyperV = new ConfigKey<String>("Storage", String.class, "ssvm.template.hyperv", "SystemVM Template (HyperV)",
+            "Name of the SSVM template on Hyperv.", true);
+    private static final ConfigKey<String> SsvmTemplateLxc = new ConfigKey<String>("Storage", String.class, "ssvm.template.lxc", "SystemVM Template (LXC)",
+            "Name of the SSVM template on LXC.", true);
+    private static final ConfigKey<String> SsvmTemplateOvm3 = new ConfigKey<String>("Storage", String.class, "ssvm.template.ovm3", "SystemVM Template (Ovm3)",
+            "Name of the SSVM template on Ovm3.", true);
     static final ConfigKey<String> NTPServerConfig = new ConfigKey<String>(String.class, "ntp.server.list", "Advanced", null,
             "Comma separated list of NTP servers to configure in Secondary storage VM", false, ConfigKey.Scope.Global, null);
 
@@ -516,15 +528,15 @@ public class SecondaryStorageManagerImpl extends ManagerBase implements Secondar
         // allocSecStorageVmStorage(dataCenterId, secStorageVmId);
         if (secStorageVm != null) {
             SubscriptionMgr.getInstance().notifySubscribers(ALERT_SUBJECT, this,
-                new SecStorageVmAlertEventArgs(SecStorageVmAlertEventArgs.SSVM_CREATED, dataCenterId, secStorageVmId, secStorageVm, null));
+                    new SecStorageVmAlertEventArgs(SecStorageVmAlertEventArgs.SSVM_CREATED, dataCenterId, secStorageVmId, secStorageVm, null));
             return secStorageVm;
         } else {
             if (s_logger.isDebugEnabled()) {
                 s_logger.debug("Unable to allocate secondary storage vm storage, remove the secondary storage vm record from DB, secondary storage vm id: " +
-                    secStorageVmId);
+                        secStorageVmId);
             }
             SubscriptionMgr.getInstance().notifySubscribers(ALERT_SUBJECT, this,
-                new SecStorageVmAlertEventArgs(SecStorageVmAlertEventArgs.SSVM_CREATE_FAILURE, dataCenterId, secStorageVmId, null, "Unable to allocate storage"));
+                    new SecStorageVmAlertEventArgs(SecStorageVmAlertEventArgs.SSVM_CREATE_FAILURE, dataCenterId, secStorageVmId, null, "Unable to allocate storage"));
         }
         return null;
     }
@@ -639,9 +651,33 @@ public class SecondaryStorageManagerImpl extends ManagerBase implements Secondar
 
         VMTemplateVO template = null;
         HypervisorType availableHypervisor = _resourceMgr.getAvailableHypervisor(dataCenterId);
-        template = _templateDao.findSystemVMReadyTemplate(dataCenterId, availableHypervisor);
+
+        String templateName = null;
+        switch (availableHypervisor) {
+        case XenServer:
+            templateName = SsvmTemplateXenServer.value();
+            break;
+        case KVM:
+            templateName = SsvmTemplateKVM.value();
+            break;
+        case VMware:
+            templateName = SsvmTemplateVMware.value();
+            break;
+        case Hyperv:
+            templateName = SsvmTemplateHyperV.value();
+            break;
+        case LXC:
+            templateName = SsvmTemplateLxc.value();
+        case Ovm3:
+            templateName = SsvmTemplateOvm3.value();
+            break;
+        default:
+            break;
+        }
+        template = _templateDao.findRoutingTemplate(availableHypervisor, templateName);
+
         if (template == null) {
-            throw new CloudRuntimeException("Not able to find the System templates or not downloaded in zone " + dataCenterId);
+            throw new CloudRuntimeException("Not able to find the Secondary Storage System template or not downloaded in zone " + dataCenterId);
         }
 
         ServiceOfferingVO serviceOffering = _serviceOffering;
@@ -649,8 +685,8 @@ public class SecondaryStorageManagerImpl extends ManagerBase implements Secondar
             serviceOffering = _offeringDao.findDefaultSystemOffering(ServiceOffering.ssvmDefaultOffUniqueName, ConfigurationManagerImpl.SystemVMUseLocalStorage.valueIn(dataCenterId));
         }
         SecondaryStorageVmVO secStorageVm =
-            new SecondaryStorageVmVO(id, serviceOffering.getId(), name, template.getId(), template.getHypervisorType(), template.getGuestOSId(), dataCenterId,
-                systemAcct.getDomainId(), systemAcct.getId(), _accountMgr.getSystemUser().getId(), role, serviceOffering.getOfferHA());
+                new SecondaryStorageVmVO(id, serviceOffering.getId(), name, template.getId(), template.getHypervisorType(), template.getGuestOSId(), dataCenterId,
+                        systemAcct.getDomainId(), systemAcct.getId(), _accountMgr.getSystemUser().getId(), role, serviceOffering.getOfferHA());
         secStorageVm.setDynamicallyScalable(template.isDynamicallyScalable());
         secStorageVm = _secStorageVmDao.persist(secStorageVm);
         try {
@@ -844,8 +880,8 @@ public class SecondaryStorageManagerImpl extends ManagerBase implements Secondar
             } else {
                 if (s_logger.isDebugEnabled()) {
                     s_logger.debug("Primary storage is not ready, wait until it is ready to launch secondary storage vm. dcId: " + dataCenterId +
-                        ", " + ConfigurationManagerImpl.SystemVMUseLocalStorage.key() + ": " + useLocalStorage + ". " +
-                        "If you want to use local storage to start SSVM, need to set " + ConfigurationManagerImpl.SystemVMUseLocalStorage.key() + " to true");
+                            ", " + ConfigurationManagerImpl.SystemVMUseLocalStorage.key() + ": " + useLocalStorage + ". " +
+                            "If you want to use local storage to start SSVM, need to set " + ConfigurationManagerImpl.SystemVMUseLocalStorage.key() + " to true");
                 }
             }
 
@@ -1056,7 +1092,7 @@ public class SecondaryStorageManagerImpl extends ManagerBase implements Secondar
                 }
 
                 SubscriptionMgr.getInstance().notifySubscribers(ALERT_SUBJECT, this,
-                    new SecStorageVmAlertEventArgs(SecStorageVmAlertEventArgs.SSVM_REBOOTED, secStorageVm.getDataCenterId(), secStorageVm.getId(), secStorageVm, null));
+                        new SecStorageVmAlertEventArgs(SecStorageVmAlertEventArgs.SSVM_REBOOTED, secStorageVm.getDataCenterId(), secStorageVm.getId(), secStorageVm, null));
 
                 return true;
             } else {
@@ -1219,7 +1255,7 @@ public class SecondaryStorageManagerImpl extends ManagerBase implements Secondar
         List<NicProfile> nics = profile.getNics();
         for (NicProfile nic : nics) {
             if ((nic.getTrafficType() == TrafficType.Public && dc.getNetworkType() == NetworkType.Advanced) ||
-                (nic.getTrafficType() == TrafficType.Guest && (dc.getNetworkType() == NetworkType.Basic || dc.isSecurityGroupEnabled()))) {
+                    (nic.getTrafficType() == TrafficType.Guest && (dc.getNetworkType() == NetworkType.Basic || dc.isSecurityGroupEnabled()))) {
                 secVm.setPublicIpAddress(nic.getIPv4Address());
                 secVm.setPublicNetmask(nic.getIPv4Netmask());
                 secVm.setPublicMacAddress(nic.getMacAddress());
@@ -1300,7 +1336,7 @@ public class SecondaryStorageManagerImpl extends ManagerBase implements Secondar
                 _rulesMgr.disableStaticNat(ip.getId(), ctx.getCallingAccount(), ctx.getCallingUserId(), true);
             } catch (Exception ex) {
                 s_logger.warn("Failed to disable static nat and release system ip " + ip + " as a part of vm " + profile.getVirtualMachine() + " stop due to exception ",
-                    ex);
+                        ex);
             }
         }
     }
@@ -1366,8 +1402,8 @@ public class SecondaryStorageManagerImpl extends ManagerBase implements Secondar
         long dataCenterId = pool.longValue();
 
         List<SecondaryStorageVmVO> ssVms =
-            _secStorageVmDao.getSecStorageVmListInStates(SecondaryStorageVm.Role.templateProcessor, dataCenterId, State.Running, State.Migrating, State.Starting,
-                State.Stopped, State.Stopping);
+                _secStorageVmDao.getSecStorageVmListInStates(SecondaryStorageVm.Role.templateProcessor, dataCenterId, State.Running, State.Migrating, State.Starting,
+                        State.Stopped, State.Stopping);
         int vmSize = (ssVms == null) ? 0 : ssVms.size();
         List<DataStore> ssStores = _dataStoreMgr.getImageStoresByScope(new ZoneScope(dataCenterId));
         int storeSize = (ssStores == null) ? 0 : ssStores.size();
@@ -1507,7 +1543,7 @@ public class SecondaryStorageManagerImpl extends ManagerBase implements Secondar
 
     @Override
     public ConfigKey<?>[] getConfigKeys() {
-        return new ConfigKey<?>[] {NTPServerConfig};
+        return new ConfigKey<?>[] { NTPServerConfig, SsvmTemplateXenServer, SsvmTemplateKVM, SsvmTemplateVMware, SsvmTemplateHyperV, SsvmTemplateLxc, SsvmTemplateOvm3 };
     }
 
 }

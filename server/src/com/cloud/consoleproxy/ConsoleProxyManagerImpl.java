@@ -32,6 +32,8 @@ import javax.naming.ConfigurationException;
 import org.apache.cloudstack.config.ApiServiceConfiguration;
 import org.apache.cloudstack.context.CallContext;
 import org.apache.cloudstack.engine.orchestration.service.NetworkOrchestrationService;
+import org.apache.cloudstack.framework.config.ConfigKey;
+import org.apache.cloudstack.framework.config.Configurable;
 import org.apache.cloudstack.framework.config.dao.ConfigurationDao;
 import org.apache.cloudstack.framework.security.keys.KeysManager;
 import org.apache.cloudstack.framework.security.keystore.KeystoreDao;
@@ -153,7 +155,7 @@ import com.google.gson.GsonBuilder;
 // Starting, HA, Migrating, Running state are all counted as "Open" for available capacity calculation
 // because sooner or later, it will be driven into Running state
 //
-public class ConsoleProxyManagerImpl extends ManagerBase implements ConsoleProxyManager, VirtualMachineGuru, SystemVmLoadScanHandler<Long>, ResourceStateAdapter {
+public class ConsoleProxyManagerImpl extends ManagerBase implements ConsoleProxyManager, VirtualMachineGuru, SystemVmLoadScanHandler<Long>, ResourceStateAdapter, Configurable {
     private static final Logger s_logger = Logger.getLogger(ConsoleProxyManagerImpl.class);
 
     private static final int DEFAULT_CAPACITY_SCAN_INTERVAL = 30000; // 30 seconds
@@ -247,6 +249,19 @@ public class ConsoleProxyManagerImpl extends ManagerBase implements ConsoleProxy
     private KeystoreDao _ksDao;
     @Inject
     private KeystoreManager _ksMgr;
+
+    private static final ConfigKey<String> ConsoleProxyTemplateXenServer = new ConfigKey<String>("Console Proxy", String.class, "consoleproxy.template.xenserver",
+            "SystemVM Template (XenServer)", "Name of the console proxy template on Xenserver.", true);
+    private static final ConfigKey<String> ConsoleProxyTemplateKVM = new ConfigKey<String>("Console Proxy", String.class, "consoleproxy.template.kvm", "SystemVM Template (KVM)",
+            "Name of the console proxy template on KVM.", true);
+    private static final ConfigKey<String> ConsoleProxyTemplateVMware = new ConfigKey<String>("Console Proxy", String.class, "consoleproxy.template.vmware",
+            "SystemVM Template (vSphere)", "Name of the console proxy template on VMware.", true);
+    private static final ConfigKey<String> ConsoleProxyTemplateHyperV = new ConfigKey<String>("Console Proxy", String.class, "consoleproxy.template.hyperv",
+            "SystemVM Template (HyperV)", "Name of the console proxy template on Hyperv.", true);
+    private static final ConfigKey<String> ConsoleProxyTemplateLxc = new ConfigKey<String>("Console Proxy", String.class, "consoleproxy.template.lxc", "SystemVM Template (LXC)",
+            "Name of the console proxy template on LXC.", true);
+    private static final ConfigKey<String> ConsoleProxyTemplateOvm3 = new ConfigKey<String>("Console Proxy", String.class, "consoleproxy.template.ovm3", "SystemVM Template (Ovm3)",
+            "Name of the console proxy template on Ovm3.", true);
 
     public class VmBasedAgentHook extends AgentHookBase {
 
@@ -441,7 +456,7 @@ public class ConsoleProxyManagerImpl extends ManagerBase implements ConsoleProxy
             }
         } else {
             s_logger.error("Unable to acquire synchronization lock to get/allocate proxy resource for vm :" + vmId +
-                ". Previous console proxy allocation is taking too long");
+                    ". Previous console proxy allocation is taking too long");
         }
 
         if (proxy == null) {
@@ -640,9 +655,34 @@ public class ConsoleProxyManagerImpl extends ManagerBase implements ConsoleProxy
 
         VMTemplateVO template = null;
         HypervisorType availableHypervisor = _resourceMgr.getAvailableHypervisor(dataCenterId);
-        template = _templateDao.findSystemVMReadyTemplate(dataCenterId, availableHypervisor);
+
+        String templateName = null;
+        switch (availableHypervisor) {
+        case XenServer:
+            templateName = ConsoleProxyTemplateXenServer.value();
+            break;
+        case KVM:
+            templateName = ConsoleProxyTemplateKVM.value();
+            break;
+        case VMware:
+            templateName = ConsoleProxyTemplateVMware.value();
+            break;
+        case Hyperv:
+            templateName = ConsoleProxyTemplateHyperV.value();
+            break;
+        case LXC:
+            templateName = ConsoleProxyTemplateLxc.value();
+            break;
+        case Ovm3:
+            templateName = ConsoleProxyTemplateOvm3.value();
+            break;
+        default:
+            break;
+        }
+        template = _templateDao.findRoutingTemplate(availableHypervisor, templateName);
+
         if (template == null) {
-            throw new CloudRuntimeException("Not able to find the System templates or not downloaded in zone " + dataCenterId);
+            throw new CloudRuntimeException("Not able to find the Console Proxy System template or not downloaded in zone " + dataCenterId);
         }
 
         Map<String, Object> context = createProxyInstance(dataCenterId, template);
@@ -658,7 +698,7 @@ public class ConsoleProxyManagerImpl extends ManagerBase implements ConsoleProxy
         ConsoleProxyVO proxy = _consoleProxyDao.findById(proxyVmId);
         if (proxy != null) {
             SubscriptionMgr.getInstance().notifySubscribers(ConsoleProxyManager.ALERT_SUBJECT, this,
-                new ConsoleProxyAlertEventArgs(ConsoleProxyAlertEventArgs.PROXY_CREATED, dataCenterId, proxy.getId(), proxy, null));
+                    new ConsoleProxyAlertEventArgs(ConsoleProxyAlertEventArgs.PROXY_CREATED, dataCenterId, proxy.getId(), proxy, null));
             return proxy;
         } else {
             if (s_logger.isDebugEnabled()) {
@@ -752,7 +792,7 @@ public class ConsoleProxyManagerImpl extends ManagerBase implements ConsoleProxy
         NetworkVO defaultNetwork = getDefaultNetworkForCreation(dc);
 
         List<? extends NetworkOffering> offerings =
-            _networkModel.getSystemAccountNetworkOfferings(NetworkOffering.SystemControlNetwork, NetworkOffering.SystemManagementNetwork);
+                _networkModel.getSystemAccountNetworkOfferings(NetworkOffering.SystemControlNetwork, NetworkOffering.SystemManagementNetwork);
         LinkedHashMap<Network, List<? extends NicProfile>> networks = new LinkedHashMap<Network, List<? extends NicProfile>>(offerings.size() + 1);
         NicProfile defaultNic = new NicProfile();
         defaultNic.setDefaultNic(true);
@@ -770,8 +810,8 @@ public class ConsoleProxyManagerImpl extends ManagerBase implements ConsoleProxy
             serviceOffering = _offeringDao.findDefaultSystemOffering(ServiceOffering.consoleProxyDefaultOffUniqueName, ConfigurationManagerImpl.SystemVMUseLocalStorage.valueIn(dataCenterId));
         }
         ConsoleProxyVO proxy =
-            new ConsoleProxyVO(id, serviceOffering.getId(), name, template.getId(), template.getHypervisorType(), template.getGuestOSId(), dataCenterId,
-                systemAcct.getDomainId(), systemAcct.getId(), _accountMgr.getSystemUser().getId(), 0, serviceOffering.getOfferHA());
+                new ConsoleProxyVO(id, serviceOffering.getId(), name, template.getId(), template.getHypervisorType(), template.getGuestOSId(), dataCenterId,
+                        systemAcct.getDomainId(), systemAcct.getId(), _accountMgr.getSystemUser().getId(), 0, serviceOffering.getOfferHA());
         proxy.setDynamicallyScalable(template.isDynamicallyScalable());
         proxy = _consoleProxyDao.persist(proxy);
         try {
@@ -914,8 +954,8 @@ public class ConsoleProxyManagerImpl extends ManagerBase implements ConsoleProxy
             return false;
         }
         List<ConsoleProxyVO> l =
-            _consoleProxyDao.getProxyListInStates(dcId, VirtualMachine.State.Starting, VirtualMachine.State.Running, VirtualMachine.State.Stopping,
-                VirtualMachine.State.Stopped, VirtualMachine.State.Migrating, VirtualMachine.State.Shutdowned, VirtualMachine.State.Unknown);
+                _consoleProxyDao.getProxyListInStates(dcId, VirtualMachine.State.Starting, VirtualMachine.State.Running, VirtualMachine.State.Stopping,
+                        VirtualMachine.State.Stopped, VirtualMachine.State.Migrating, VirtualMachine.State.Shutdowned, VirtualMachine.State.Unknown);
 
         String value = _configDao.getValue(Config.ConsoleProxyLaunchMax.key());
         int launchLimit = NumbersUtil.parseInt(value, 10);
@@ -975,7 +1015,7 @@ public class ConsoleProxyManagerImpl extends ManagerBase implements ConsoleProxy
                         s_logger.info("Console proxy " + proxy.getHostName() + " is started");
                     }
                     SubscriptionMgr.getInstance().notifySubscribers(ConsoleProxyManager.ALERT_SUBJECT, this,
-                        new ConsoleProxyAlertEventArgs(ConsoleProxyAlertEventArgs.PROXY_UP, dataCenterId, proxy.getId(), proxy, null));
+                            new ConsoleProxyAlertEventArgs(ConsoleProxyAlertEventArgs.PROXY_UP, dataCenterId, proxy.getId(), proxy, null));
                 } else {
                     if (s_logger.isInfoEnabled()) {
                         s_logger.info("Unable to start console proxy vm for standby capacity, vm id : " + proxyVmId + ", will recycle it and start a new one");
@@ -987,14 +1027,14 @@ public class ConsoleProxyManagerImpl extends ManagerBase implements ConsoleProxy
                 }
             }
         } catch (Exception e) {
-           errorString = e.getMessage();
-           throw e;
+            errorString = e.getMessage();
+            throw e;
         } finally {
             // TODO - For now put all the alerts as creation failure. Distinguish between creation vs start failure in future.
             // Also add failure reason since startvm masks some of them.
             if (proxy == null || proxy.getState() != State.Running)
                 SubscriptionMgr.getInstance().notifySubscribers(ConsoleProxyManager.ALERT_SUBJECT, this,
-                    new ConsoleProxyAlertEventArgs(ConsoleProxyAlertEventArgs.PROXY_CREATE_FAILURE, dataCenterId, 0l, null, errorString));
+                        new ConsoleProxyAlertEventArgs(ConsoleProxyAlertEventArgs.PROXY_CREATE_FAILURE, dataCenterId, 0l, null, errorString));
         }
     }
 
@@ -1191,7 +1231,7 @@ public class ConsoleProxyManagerImpl extends ManagerBase implements ConsoleProxy
                 }
 
                 SubscriptionMgr.getInstance().notifySubscribers(ConsoleProxyManager.ALERT_SUBJECT, this,
-                    new ConsoleProxyAlertEventArgs(ConsoleProxyAlertEventArgs.PROXY_REBOOTED, proxy.getDataCenterId(), proxy.getId(), proxy, null));
+                        new ConsoleProxyAlertEventArgs(ConsoleProxyAlertEventArgs.PROXY_REBOOTED, proxy.getDataCenterId(), proxy.getId(), proxy, null));
 
                 return true;
             } else {
@@ -1434,7 +1474,7 @@ public class ConsoleProxyManagerImpl extends ManagerBase implements ConsoleProxy
         List<NicProfile> nics = profile.getNics();
         for (NicProfile nic : nics) {
             if ((nic.getTrafficType() == TrafficType.Public && dc.getNetworkType() == NetworkType.Advanced) ||
-                (nic.getTrafficType() == TrafficType.Guest && (dc.getNetworkType() == NetworkType.Basic || dc.isSecurityGroupEnabled()))) {
+                    (nic.getTrafficType() == TrafficType.Guest && (dc.getNetworkType() == NetworkType.Basic || dc.isSecurityGroupEnabled()))) {
                 proxy.setPublicIpAddress(nic.getIPv4Address());
                 proxy.setPublicNetmask(nic.getIPv4Netmask());
                 proxy.setPublicMacAddress(nic.getMacAddress());
@@ -1530,7 +1570,7 @@ public class ConsoleProxyManagerImpl extends ManagerBase implements ConsoleProxy
                 _rulesMgr.disableStaticNat(ip.getId(), ctx.getCallingAccount(), ctx.getCallingUserId(), true);
             } catch (Exception ex) {
                 s_logger.warn("Failed to disable static nat and release system ip " + ip + " as a part of vm " + profile.getVirtualMachine() + " stop due to exception ",
-                    ex);
+                        ex);
             }
         }
     }
@@ -1563,17 +1603,17 @@ public class ConsoleProxyManagerImpl extends ManagerBase implements ConsoleProxy
         ConsoleProxyManagementState state = getManagementState();
         if (state != null) {
             switch (state) {
-                case Auto:
-                case Manual:
-                case Suspending:
-                    break;
+            case Auto:
+            case Manual:
+            case Suspending:
+                break;
 
-                case ResetSuspending:
-                    handleResetSuspending();
-                    break;
+            case ResetSuspending:
+                handleResetSuspending();
+                break;
 
-                default:
-                    assert (false);
+            default:
+                assert (false);
             }
         }
     }
@@ -1731,6 +1771,17 @@ public class ConsoleProxyManagerImpl extends ManagerBase implements ConsoleProxy
     @Inject
     public void setConsoleProxyAllocators(List<ConsoleProxyAllocator> consoleProxyAllocators) {
         _consoleProxyAllocators = consoleProxyAllocators;
+    }
+
+    @Override
+    public String getConfigComponentName() {
+        return ConsoleProxyManagerImpl.class.getSimpleName();
+    }
+
+    @Override
+    public ConfigKey<?>[] getConfigKeys() {
+        return new ConfigKey<?>[] { ConsoleProxyTemplateXenServer, ConsoleProxyTemplateKVM, ConsoleProxyTemplateVMware, ConsoleProxyTemplateHyperV, ConsoleProxyTemplateLxc,
+            ConsoleProxyTemplateOvm3 };
     }
 
 }
