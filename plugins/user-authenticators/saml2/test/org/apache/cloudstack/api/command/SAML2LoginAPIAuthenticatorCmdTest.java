@@ -21,6 +21,7 @@ package org.apache.cloudstack.api.command;
 
 import static org.junit.Assert.assertFalse;
 
+import java.io.IOException;
 import java.lang.reflect.Field;
 import java.net.InetAddress;
 import java.security.KeyPair;
@@ -45,8 +46,10 @@ import org.joda.time.DateTime;
 import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Mockito;
+import org.mockito.Spy;
 import org.mockito.runners.MockitoJUnitRunner;
 import org.opensaml.common.SAMLVersion;
 import org.opensaml.saml2.core.Assertion;
@@ -105,6 +108,10 @@ public class SAML2LoginAPIAuthenticatorCmdTest {
 
     @Mock
     HttpServletRequest req;
+
+    @Spy
+    @InjectMocks
+    private SAML2LoginAPIAuthenticatorCmd cmdSpy;
 
     private Response buildMockResponse() throws Exception {
         Response samlMessage = new ResponseBuilder().buildObject();
@@ -205,4 +212,102 @@ public class SAML2LoginAPIAuthenticatorCmdTest {
     public void testGetAPIType() {
         Assert.assertTrue(new SAML2LoginAPIAuthenticatorCmd().getAPIType() == APIAuthenticationType.LOGIN_API);
     }
+
+    @Test
+    public void whenFailToAuthenticateThrowExceptionOrRedirectToUrlTestSaml2FailedLoginRedirectUrlBlank() throws IOException {
+        UserAccountVO userAccount = configureTestWhenFailToAuthenticateThrowExceptionOrRedirectToUrl("entity", " ", false);
+
+        boolean expectServerApiException = runTestWhenFailToAuthenticateThrowExceptionOrRedirectToUrl(userAccount);
+
+        verifyTestWhenFailToAuthenticateThrowExceptionOrRedirectToUrl(true, expectServerApiException, 0, 1);
+    }
+
+    @Test
+    public void whenFailToAuthenticateThrowExceptionOrRedirectToUrlTestSaml2FailedLoginRedirectUrlNull() throws IOException {
+        UserAccountVO userAccount = configureTestWhenFailToAuthenticateThrowExceptionOrRedirectToUrl("entity", null, false);
+
+        boolean expectServerApiException = runTestWhenFailToAuthenticateThrowExceptionOrRedirectToUrl(userAccount);
+
+        verifyTestWhenFailToAuthenticateThrowExceptionOrRedirectToUrl(true, expectServerApiException, 0, 1);
+    }
+
+    @Test
+    public void whenFailToAuthenticateThrowExceptionOrRedirectToUrlTestSaml2FailedLoginRedirectUrlEmpty() throws IOException {
+        UserAccountVO userAccount = configureTestWhenFailToAuthenticateThrowExceptionOrRedirectToUrl("entity", "", false);
+
+        boolean hasThrownServerApiException = runTestWhenFailToAuthenticateThrowExceptionOrRedirectToUrl(userAccount);
+
+        verifyTestWhenFailToAuthenticateThrowExceptionOrRedirectToUrl(true, hasThrownServerApiException, 0, 1);
+    }
+
+    @Test
+    public void whenFailToAuthenticateThrowExceptionOrRedirectToUrlTestSaml2FailedLoginRedirectExternalEntityNullAndUrlNotConfigured() throws IOException {
+        UserAccountVO userAccount = configureTestWhenFailToAuthenticateThrowExceptionOrRedirectToUrl(null, " ", false);
+
+        boolean hasThrownServerApiException = runTestWhenFailToAuthenticateThrowExceptionOrRedirectToUrl(userAccount);
+
+        verifyTestWhenFailToAuthenticateThrowExceptionOrRedirectToUrl(true, hasThrownServerApiException, 0, 1);
+    }
+
+    @Test
+    public void whenFailToAuthenticateThrowExceptionOrRedirectToUrlTestSaml2FailedLoginRedirectExternalEntityNullAndUrlConfigured() throws IOException {
+        UserAccountVO userAccount = configureTestWhenFailToAuthenticateThrowExceptionOrRedirectToUrl(null, "some.url", true);
+
+        boolean hasThrownServerApiException = runTestWhenFailToAuthenticateThrowExceptionOrRedirectToUrl(userAccount);
+
+        verifyTestWhenFailToAuthenticateThrowExceptionOrRedirectToUrl(false, hasThrownServerApiException, 1, 1);
+    }
+
+    @Test
+    public void whenFailToAuthenticateThrowExceptionOrRedirectToUrlTestSaml2FailedLoginRedirectUrlConfigured() throws IOException {
+        UserAccountVO userAccount = configureTestWhenFailToAuthenticateThrowExceptionOrRedirectToUrl("entity", "some.url", false);
+
+        boolean hasThrownServerApiException = runTestWhenFailToAuthenticateThrowExceptionOrRedirectToUrl(userAccount);
+
+        verifyTestWhenFailToAuthenticateThrowExceptionOrRedirectToUrl(false, hasThrownServerApiException, 1, 1);
+    }
+
+    @Test
+    public void whenFailToAuthenticateThrowExceptionOrRedirectToUrlTestSaml2FailedLoginRedirectUrlUserAccountNull() throws IOException {
+        configureTestWhenFailToAuthenticateThrowExceptionOrRedirectToUrl("entity", "some.url", true);
+
+        boolean hasThrownServerApiException = runTestWhenFailToAuthenticateThrowExceptionOrRedirectToUrl(null);
+
+        verifyTestWhenFailToAuthenticateThrowExceptionOrRedirectToUrl(false, hasThrownServerApiException, 1, 1);
+    }
+
+    @Test
+    public void whenFailToAuthenticateThrowExceptionOrRedirectToUrlTestSaml2FailedLoginRedirectUrlIsUserAuthorized() throws IOException {
+        UserAccountVO userAccount = configureTestWhenFailToAuthenticateThrowExceptionOrRedirectToUrl("entity", "some.url", true);
+
+        boolean hasThrownServerApiException = runTestWhenFailToAuthenticateThrowExceptionOrRedirectToUrl(userAccount);
+
+        verifyTestWhenFailToAuthenticateThrowExceptionOrRedirectToUrl(false, hasThrownServerApiException, 0, 0);
+    }
+
+    private UserAccountVO configureTestWhenFailToAuthenticateThrowExceptionOrRedirectToUrl(String entity, String configurationDaoGetValue, Boolean isUserAuthorized)
+            throws IOException {
+        Mockito.when(samlAuthManager.isUserAuthorized(Mockito.anyLong(), Mockito.anyString())).thenReturn(isUserAuthorized);
+
+        UserAccountVO userAccount = new UserAccountVO();
+        userAccount.setExternalEntity(entity);
+        userAccount.setId(0l);
+        return userAccount;
+    }
+
+    private void verifyTestWhenFailToAuthenticateThrowExceptionOrRedirectToUrl(boolean expectServerApiException, boolean hasThrownServerApiException, int timesOfSendRedirect,
+            int timesOfConfigDao) throws IOException {
+        Mockito.verify(resp, Mockito.times(timesOfSendRedirect)).sendRedirect(Mockito.anyString());
+        Assert.assertEquals(expectServerApiException, hasThrownServerApiException);
+    }
+
+    private boolean runTestWhenFailToAuthenticateThrowExceptionOrRedirectToUrl(UserAccountVO userAccount) throws IOException {
+        try {
+            cmdSpy.whenFailToAuthenticateThrowExceptionOrRedirectToUrl(null, "responseType", resp, new IssuerBuilder().buildObject(), userAccount);
+        } catch (ServerApiException e) {
+            return true;
+        }
+        return false;
+    }
+
 }

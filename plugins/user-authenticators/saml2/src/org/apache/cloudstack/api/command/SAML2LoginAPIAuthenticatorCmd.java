@@ -16,14 +16,18 @@
 // under the License.
 package org.apache.cloudstack.api.command;
 
-import com.cloud.api.response.ApiResponseSerializer;
-import com.cloud.exception.CloudAuthenticationException;
-import com.cloud.user.Account;
-import com.cloud.user.DomainManager;
-import com.cloud.user.UserAccount;
-import com.cloud.user.UserAccountVO;
-import com.cloud.user.dao.UserAccountDao;
-import com.cloud.utils.db.EntityManager;
+import java.io.IOException;
+import java.net.InetAddress;
+import java.util.List;
+import java.util.Map;
+
+import javax.inject.Inject;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import javax.servlet.http.HttpSession;
+import javax.xml.parsers.ParserConfigurationException;
+import javax.xml.stream.FactoryConfigurationError;
+
 import org.apache.cloudstack.api.APICommand;
 import org.apache.cloudstack.api.ApiConstants;
 import org.apache.cloudstack.api.ApiErrorCode;
@@ -35,11 +39,14 @@ import org.apache.cloudstack.api.auth.APIAuthenticationType;
 import org.apache.cloudstack.api.auth.APIAuthenticator;
 import org.apache.cloudstack.api.auth.PluggableAPIAuthenticator;
 import org.apache.cloudstack.api.response.LoginCmdResponse;
+import org.apache.cloudstack.framework.config.ConfigKey;
+import org.apache.cloudstack.framework.config.Configurable;
 import org.apache.cloudstack.saml.SAML2AuthManager;
 import org.apache.cloudstack.saml.SAMLPluginConstants;
 import org.apache.cloudstack.saml.SAMLProviderMetadata;
 import org.apache.cloudstack.saml.SAMLTokenVO;
 import org.apache.cloudstack.saml.SAMLUtils;
+import org.apache.commons.lang.StringUtils;
 import org.apache.log4j.Logger;
 import org.opensaml.DefaultBootstrap;
 import org.opensaml.saml2.core.Assertion;
@@ -62,19 +69,17 @@ import org.opensaml.xml.signature.SignatureValidator;
 import org.opensaml.xml.validation.ValidationException;
 import org.xml.sax.SAXException;
 
-import javax.inject.Inject;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
-import javax.servlet.http.HttpSession;
-import javax.xml.parsers.ParserConfigurationException;
-import javax.xml.stream.FactoryConfigurationError;
-import java.io.IOException;
-import java.net.InetAddress;
-import java.util.List;
-import java.util.Map;
+import com.cloud.api.response.ApiResponseSerializer;
+import com.cloud.exception.CloudAuthenticationException;
+import com.cloud.user.Account;
+import com.cloud.user.DomainManager;
+import com.cloud.user.UserAccount;
+import com.cloud.user.UserAccountVO;
+import com.cloud.user.dao.UserAccountDao;
+import com.cloud.utils.db.EntityManager;
 
 @APICommand(name = "samlSso", description = "SP initiated SAML Single Sign On", requestHasSensitiveInfo = true, responseObject = LoginCmdResponse.class, entityType = {})
-public class SAML2LoginAPIAuthenticatorCmd extends BaseCmd implements APIAuthenticator {
+public class SAML2LoginAPIAuthenticatorCmd extends BaseCmd implements APIAuthenticator, Configurable {
     public static final Logger s_logger = Logger.getLogger(SAML2LoginAPIAuthenticatorCmd.class.getName());
     private static final String s_name = "loginresponse";
 
@@ -92,6 +97,9 @@ public class SAML2LoginAPIAuthenticatorCmd extends BaseCmd implements APIAuthent
     DomainManager _domainMgr;
     @Inject
     private UserAccountDao _userAccountDao;
+
+    private static final ConfigKey<String> Saml2FailedLoginRedirectUrl = new ConfigKey<String>("Advanced", String.class, "saml2.failed.login.redirect.url", "",
+            "The URL to redirect the SAML2 login failed message (the default vaulue is empty).", true);
 
     SAML2AuthManager _samlAuthManager;
 
@@ -170,7 +178,7 @@ public class SAML2LoginAPIAuthenticatorCmd extends BaseCmd implements APIAuthent
                     throw new ServerApiException(ApiErrorCode.PARAM_ERROR, _apiServer.getSerializedApiError(ApiErrorCode.PARAM_ERROR.getHttpCode(),
                             "IdP ID (" + idpId + ") has no Single Sign On URL defined please contact "
                                     + idpMetadata.getContactPersonName() + " <" + idpMetadata.getContactPersonEmail() + ">, cannot proceed.",
-                            params, responseType));
+                                    params, responseType));
                 }
                 String authnId = SAMLUtils.generateSecureRandomId();
                 _samlAuthManager.saveToken(authnId, domainPath, idpMetadata.getEntityId());
@@ -302,11 +310,7 @@ public class SAML2LoginAPIAuthenticatorCmd extends BaseCmd implements APIAuthent
                     }
                 }
 
-                if (userAccount == null || userAccount.getExternalEntity() == null || !_samlAuthManager.isUserAuthorized(userAccount.getId(), issuer.getValue())) {
-                    throw new ServerApiException(ApiErrorCode.ACCOUNT_ERROR, _apiServer.getSerializedApiError(ApiErrorCode.ACCOUNT_ERROR.getHttpCode(),
-                            "Your authenticated user is not authorized for SAML Single Sign-On, please contact your administrator",
-                            params, responseType));
-                }
+                whenFailToAuthenticateThrowExceptionOrRedirectToUrl(params, responseType, resp, issuer, userAccount);
 
                 try {
                     if (_apiServer.verifyUser(userAccount.getId())) {
@@ -329,6 +333,24 @@ public class SAML2LoginAPIAuthenticatorCmd extends BaseCmd implements APIAuthent
                 params, responseType));
     }
 
+    /**
+     * If it fails to authenticate the user, the method gets the value from configuration
+     * Saml2FailedLoginRedirectUrl; if the user configured an error URL then it redirects to that
+     * URL, otherwise it throws the ServerApiException
+     */
+    protected void whenFailToAuthenticateThrowExceptionOrRedirectToUrl(final Map<String, Object[]> params, final String responseType, final HttpServletResponse resp, Issuer issuer,
+            UserAccount userAccount) throws IOException {
+        if (userAccount == null || userAccount.getExternalEntity() == null || !_samlAuthManager.isUserAuthorized(userAccount.getId(), issuer.getValue())) {
+            String saml2FailedLoginRedirectUrl = Saml2FailedLoginRedirectUrl.value(); //TODO configDao.getValue(Config.Saml2FailedLoginRedirectUrl.toString());
+            if (StringUtils.isBlank(saml2FailedLoginRedirectUrl)) {
+                throw new ServerApiException(ApiErrorCode.ACCOUNT_ERROR, _apiServer.getSerializedApiError(ApiErrorCode.ACCOUNT_ERROR.getHttpCode(),
+                        "Your authenticated user is not authorized for SAML Single Sign-On, please contact your administrator", params, responseType));
+            } else {
+                resp.sendRedirect(saml2FailedLoginRedirectUrl);
+            }
+        }
+    }
+
     @Override
     public APIAuthenticationType getAPIType() {
         return APIAuthenticationType.LOGIN_API;
@@ -344,5 +366,15 @@ public class SAML2LoginAPIAuthenticatorCmd extends BaseCmd implements APIAuthent
         if (_samlAuthManager == null) {
             s_logger.error("No suitable Pluggable Authentication Manager found for SAML2 Login Cmd");
         }
+    }
+
+    @Override
+    public String getConfigComponentName() {
+        return SAML2LoginAPIAuthenticatorCmd.class.getSimpleName();
+    }
+
+    @Override
+    public ConfigKey<?>[] getConfigKeys() {
+        return new ConfigKey<?>[] { Saml2FailedLoginRedirectUrl };
     }
 }
