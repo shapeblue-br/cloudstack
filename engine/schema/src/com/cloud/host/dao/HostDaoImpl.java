@@ -295,11 +295,11 @@ public class HostDaoImpl extends GenericDaoBase<HostVO, Long> implements HostDao
         }
         HostTransferSearch.and("id", HostTransferSearch.entity().getId(), SearchCriteria.Op.NULL);
         UnmanagedDirectConnectSearch.join("hostTransferSearch", HostTransferSearch, HostTransferSearch.entity().getId(), UnmanagedDirectConnectSearch.entity().getId(),
-            JoinType.LEFTOUTER);
+                JoinType.LEFTOUTER);
         ClusterManagedSearch = _clusterDao.createSearchBuilder();
         ClusterManagedSearch.and("managed", ClusterManagedSearch.entity().getManagedState(), SearchCriteria.Op.EQ);
         UnmanagedDirectConnectSearch.join("ClusterManagedSearch", ClusterManagedSearch, ClusterManagedSearch.entity().getId(), UnmanagedDirectConnectSearch.entity()
-            .getClusterId(), JoinType.INNER);
+                .getClusterId(), JoinType.INNER);
         UnmanagedDirectConnectSearch.done();
 
         DirectConnectSearch = createSearchBuilder();
@@ -640,7 +640,7 @@ public class HostDaoImpl extends GenericDaoBase<HostVO, Long> implements HostDao
         SearchCriteria<HostVO> sc = UnmanagedApplianceSearch.create();
         sc.setParameters("lastPinged", lastPingSecondsAfter);
         sc.setParameters("types", Type.ExternalDhcp, Type.ExternalFirewall, Type.ExternalLoadBalancer, Type.BaremetalDhcp, Type.BaremetalPxe, Type.TrafficMonitor,
-            Type.L2Networking);
+                Type.L2Networking);
         List<HostVO> hosts = lockRows(sc, null, true);
 
         for (HostVO host : hosts) {
@@ -872,10 +872,10 @@ public class HostDaoImpl extends GenericDaoBase<HostVO, Long> implements HostDao
     @DB
     public List<RunningHostCountInfo> getRunningHostCounts(Date cutTime) {
         String sql =
-            "select * from (" + "select h.data_center_id, h.type, count(*) as count from host as h INNER JOIN mshost as m ON h.mgmt_server_id=m.msid "
-                + "where h.status='Up' and h.type='SecondaryStorage' and m.last_update > ? " + "group by h.data_center_id, h.type " + "UNION ALL "
-                + "select h.data_center_id, h.type, count(*) as count from host as h INNER JOIN mshost as m ON h.mgmt_server_id=m.msid "
-                + "where h.status='Up' and h.type='Routing' and m.last_update > ? " + "group by h.data_center_id, h.type) as t " + "ORDER by t.data_center_id, t.type";
+                "select * from (" + "select h.data_center_id, h.type, count(*) as count from host as h INNER JOIN mshost as m ON h.mgmt_server_id=m.msid "
+                        + "where h.status='Up' and h.type='SecondaryStorage' and m.last_update > ? " + "group by h.data_center_id, h.type " + "UNION ALL "
+                        + "select h.data_center_id, h.type, count(*) as count from host as h INNER JOIN mshost as m ON h.mgmt_server_id=m.msid "
+                        + "where h.status='Up' and h.type='Routing' and m.last_update > ? " + "group by h.data_center_id, h.type) as t " + "ORDER by t.data_center_id, t.type";
 
         ArrayList<RunningHostCountInfo> l = new ArrayList<RunningHostCountInfo>();
 
@@ -991,23 +991,23 @@ public class HostDaoImpl extends GenericDaoBase<HostVO, Long> implements HostDao
                 StringBuilder str = new StringBuilder("Unable to update host for event:").append(event.toString());
                 str.append(". Name=").append(host.getName());
                 str.append("; New=[status=")
-                        .append(newStatus.toString())
-                        .append(":msid=")
-                        .append(newStatus.lostConnection() ? "null" : host.getManagementServerId())
-                        .append(":lastpinged=")
-                        .append(host.getLastPinged())
-                        .append("]");
+                .append(newStatus.toString())
+                .append(":msid=")
+                .append(newStatus.lostConnection() ? "null" : host.getManagementServerId())
+                .append(":lastpinged=")
+                .append(host.getLastPinged())
+                .append("]");
                 str.append("; Old=[status=").append(oldStatus.toString()).append(":msid=").append(host.getManagementServerId()).append(":lastpinged=").append(oldPingTime)
-                        .append("]");
+                .append("]");
                 str.append("; DB=[status=")
-                        .append(vo.getStatus().toString())
-                        .append(":msid=")
-                        .append(vo.getManagementServerId())
-                        .append(":lastpinged=")
-                        .append(vo.getLastPinged())
-                        .append(":old update count=")
-                        .append(oldUpdateCount)
-                        .append("]");
+                .append(vo.getStatus().toString())
+                .append(":msid=")
+                .append(vo.getManagementServerId())
+                .append(":lastpinged=")
+                .append(vo.getLastPinged())
+                .append(":old update count=")
+                .append(oldUpdateCount)
+                .append("]");
                 status_logger.debug(str.toString());
             } else {
                 StringBuilder msg = new StringBuilder("Agent status update: [");
@@ -1143,5 +1143,26 @@ public class HostDaoImpl extends GenericDaoBase<HostVO, Long> implements HostDao
         SearchCriteria<HostVO> sc = TypeSearch.create();
         sc.setParameters("type", type);
         return listBy(sc);
+    }
+
+    String sqlFindHostConnectedToSnapshotStoragePoolToExecuteCommand = "select h.id from snapshots s join volumes v on v.id = s.volume_id "
+            + "join storage_pool pool on pool.id = v.pool_id join cluster c on pool.cluster_id = c.id join host h on h.cluster_id = c.id "
+            + "where s.id = ? and h.status = 'Up' and h.type = 'Routing' ORDER by rand() limit 1";
+    @Override
+    public HostVO findHostToOperateOnSnapshot(long snapshotId) {
+        TransactionLegacy tx = TransactionLegacy.currentTxn();
+        try {
+            PreparedStatement pstmt = tx.prepareAutoCloseStatement(sqlFindHostConnectedToSnapshotStoragePoolToExecuteCommand);
+            pstmt.setLong(1, snapshotId);
+            ResultSet rs = pstmt.executeQuery();
+            if (!rs.next()) {
+                throw new CloudRuntimeException(
+                        String.format("Could not find a host connected to a storage pool that is used to store the informed snapshot [snapshotId=%d]. ", snapshotId));
+            }
+            long hostId = rs.getLong("id");
+            return findById(hostId);
+        } catch (SQLException e) {
+            throw new CloudRuntimeException(e);
+        }
     }
 }
