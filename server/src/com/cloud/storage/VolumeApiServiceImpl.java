@@ -1204,11 +1204,78 @@ public class VolumeApiServiceImpl extends ManagerBase implements VolumeApiServic
         }
     }
 
-    @Override
     @DB
+    @Override
     @ActionEvent(eventType = EventTypes.EVENT_VOLUME_DELETE, eventDescription = "deleting volume")
     public boolean deleteVolume(long volumeId, Account caller) throws ConcurrentOperationException {
+        VolumeVO volume = retrieveAndValidateVolumeToDelete(volumeId, caller);
+        try {
+            destroyAndDecrementVolumeIfNeeded(volume);
 
+            // Mark volume as removed if volume has not been created on primary or secondary
+            if (volume.getState() == Volume.State.Allocated) {
+                _volsDao.remove(volumeId);
+                stateTransitTo(volume, Volume.Event.DestroyRequested);
+                _resourceLimitMgr.recalculateResourceCount(volume.getAccountId(), volume.getDomainId(), ResourceType.primary_storage.getOrdinal());
+                return true;
+            }
+            // expunge volume from primary if volume is on primary
+            removeAndDecrementVolumeFromPrimaryStorage(volume);
+            // expunge volume from secondary if volume is on image store
+            removeAndDecrementVolumeFromSecondaryStorage(volume);
+            // delete all cache entries for this volume
+            cleanCacheEntriesForVolume(volume);
+            return true;
+        } catch (InterruptedException | ExecutionException | NoTransitionException e) {
+            s_logger.warn("Failed to expunge volume:", e);
+            return false;
+        }
+    }
+
+    private void cleanCacheEntriesForVolume(VolumeVO volume) {
+        List<VolumeInfo> cacheVols = volFactory.listVolumeOnCache(volume.getId());
+        for (VolumeInfo volOnCache : cacheVols) {
+            s_logger.info("Delete volume from image cache store: " + volOnCache.getDataStore().getName());
+            volOnCache.delete();
+        }
+    }
+
+    private void removeAndDecrementVolumeFromSecondaryStorage(VolumeVO volume) throws InterruptedException, ExecutionException {
+        VolumeInfo volOnSecondary = volFactory.getVolume(volume.getId(), DataStoreRole.Image);
+        if (volOnSecondary != null) {
+            s_logger.info("Expunging volume " + volume.getId() + " from secondary data store");
+            AsyncCallFuture<VolumeApiResult> future2 = volService.expungeVolumeAsync(volOnSecondary);
+            future2.get();
+            //decrement secondary storage count
+            _resourceLimitMgr.recalculateResourceCount(volume.getAccountId(), volume.getDomainId(), ResourceType.secondary_storage.getOrdinal());
+        }
+    }
+
+    private void removeAndDecrementVolumeFromPrimaryStorage(VolumeVO volume) throws InterruptedException, ExecutionException {
+        VolumeInfo volOnPrimary = volFactory.getVolume(volume.getId(), DataStoreRole.Primary);
+        if (volOnPrimary != null) {
+            s_logger.info("Expunging volume " + volume.getId() + " from primary data store");
+            AsyncCallFuture<VolumeApiResult> future = volService.expungeVolumeAsync(volOnPrimary);
+            future.get();
+            //decrement primary storage count
+            _resourceLimitMgr.recalculateResourceCount(volume.getAccountId(), volume.getDomainId(), ResourceType.primary_storage.getOrdinal());
+        }
+    }
+
+    private void destroyAndDecrementVolumeIfNeeded(VolumeVO volume) {
+        if (volume.getState() != Volume.State.Destroy && volume.getState() != Volume.State.Expunging && volume.getState() != Volume.State.Expunged) {
+            volService.destroyVolume(volume.getId());
+
+            Long instanceId = volume.getInstanceId();
+            VMInstanceVO vmInstance = _vmInstanceDao.findById(instanceId);
+            if (instanceId == null || (vmInstance.getType().equals(VirtualMachine.Type.User))) {
+                // Decrement the resource count for volumes and primary storage belonging user VM's only
+                _resourceLimitMgr.decrementResourceCount(volume.getAccountId(), ResourceType.volume, volume.isDisplayVolume());
+            }
+        }
+    }
+
+    private VolumeVO retrieveAndValidateVolumeToDelete(long volumeId, Account caller) {
         VolumeVO volume = _volsDao.findById(volumeId);
         if (volume == null) {
             throw new InvalidParameterValueException("Unable to find volume with ID: " + volumeId);
@@ -1234,57 +1301,7 @@ public class VolumeApiServiceImpl extends ManagerBase implements VolumeApiServic
         if (volume.getState() == Volume.State.NotUploaded || volume.getState() == Volume.State.UploadInProgress) {
             throw new InvalidParameterValueException("The volume is either getting uploaded or it may be initiated shortly, please wait for it to be completed");
         }
-
-        try {
-            if (volume.getState() != Volume.State.Destroy && volume.getState() != Volume.State.Expunging && volume.getState() != Volume.State.Expunged) {
-                Long instanceId = volume.getInstanceId();
-                if (!volService.destroyVolume(volume.getId())) {
-                    return false;
-                }
-
-                VMInstanceVO vmInstance = _vmInstanceDao.findById(instanceId);
-                if (instanceId == null || (vmInstance.getType().equals(VirtualMachine.Type.User))) {
-                    // Decrement the resource count for volumes and primary storage belonging user VM's only
-                    _resourceLimitMgr.decrementResourceCount(volume.getAccountId(), ResourceType.volume, volume.isDisplayVolume());
-                }
-            }
-            // Mark volume as removed if volume has not been created on primary or secondary
-            if (volume.getState() == Volume.State.Allocated) {
-                _volsDao.remove(volumeId);
-                stateTransitTo(volume, Volume.Event.DestroyRequested);
-                return true;
-            }
-            // expunge volume from primary if volume is on primary
-            VolumeInfo volOnPrimary = volFactory.getVolume(volume.getId(), DataStoreRole.Primary);
-            if (volOnPrimary != null) {
-                s_logger.info("Expunging volume " + volume.getId() + " from primary data store");
-                AsyncCallFuture<VolumeApiResult> future = volService.expungeVolumeAsync(volOnPrimary);
-                future.get();
-                //decrement primary storage count
-                _resourceLimitMgr.recalculateResourceCount(volume.getAccountId(), volume.getDomainId(), ResourceType.primary_storage.getOrdinal());
-            }
-            // expunge volume from secondary if volume is on image store
-            VolumeInfo volOnSecondary = volFactory.getVolume(volume.getId(), DataStoreRole.Image);
-            if (volOnSecondary != null) {
-                s_logger.info("Expunging volume " + volume.getId() + " from secondary data store");
-                AsyncCallFuture<VolumeApiResult> future2 = volService.expungeVolumeAsync(volOnSecondary);
-                future2.get();
-                //decrement secondary storage count
-                _resourceLimitMgr.recalculateResourceCount(volume.getAccountId(), volume.getDomainId(), ResourceType.secondary_storage.getOrdinal());
-            }
-            // delete all cache entries for this volume
-            List<VolumeInfo> cacheVols = volFactory.listVolumeOnCache(volume.getId());
-            for (VolumeInfo volOnCache : cacheVols) {
-                s_logger.info("Delete volume from image cache store: " + volOnCache.getDataStore().getName());
-                volOnCache.delete();
-            }
-
-        } catch (InterruptedException | ExecutionException | NoTransitionException e) {
-            s_logger.warn("Failed to expunge volume:", e);
-            return false;
-        }
-
-        return true;
+        return volume;
     }
 
     private boolean stateTransitTo(Volume vol, Volume.Event event) throws NoTransitionException {

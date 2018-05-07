@@ -93,7 +93,7 @@ public interface VolumeService {
 
     AsyncCallFuture<CommandResult> migrateVolumes(Map<VolumeInfo, DataStore> volumeMap, VirtualMachineTO vmTo, Host srcHost, Host destHost);
 
-    boolean destroyVolume(long volumeId) throws ConcurrentOperationException;
+    void destroyVolume(long volumeId) throws ConcurrentOperationException;
 
     AsyncCallFuture<VolumeApiResult> registerVolume(VolumeInfo volume, DataStore store);
 

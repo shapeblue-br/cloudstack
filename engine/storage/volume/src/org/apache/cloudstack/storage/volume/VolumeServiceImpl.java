@@ -1139,7 +1139,7 @@ public class VolumeServiceImpl implements VolumeService {
 
     @Override
     @DB
-    public boolean destroyVolume(long volumeId) throws ConcurrentOperationException {
+    public void destroyVolume(long volumeId) throws ConcurrentOperationException {
         // mark volume entry in volumes table as destroy state
         VolumeInfo vol = volFactory.getVolume(volumeId);
         vol.stateTransit(Volume.Event.DestroyRequested);
@@ -1147,7 +1147,6 @@ public class VolumeServiceImpl implements VolumeService {
 
         vol.stateTransit(Volume.Event.OperationSucceeded);
 
-        return true;
     }
 
     @Override
