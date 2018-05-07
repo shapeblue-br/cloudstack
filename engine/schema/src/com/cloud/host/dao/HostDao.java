@@ -99,4 +99,6 @@ public interface HostDao extends GenericDao<HostVO, Long>, StateDao<Status, Stat
     HostVO findByPublicIp(String publicIp);
 
     List<HostVO> listByType(Type type);
+
+    HostVO findHostToOperateOnSnapshot(long snapshotId);
 }
