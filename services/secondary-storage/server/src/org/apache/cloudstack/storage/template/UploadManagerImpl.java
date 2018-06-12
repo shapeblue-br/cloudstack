@@ -298,6 +298,17 @@ public class UploadManagerImpl extends ManagerBase implements UploadManager {
             return new CreateEntityDownloadURLAnswer(errorString, CreateEntityDownloadURLAnswer.RESULT_FAILURE);
         }
 
+        // Changing the file permission to enable user to download the template.
+        command = new Script("/bin/bash", s_logger);
+        command.add("-C");
+        command.add("chmod ugo+r /mnt/SecStorage/" + cmd.getParent() + File.separator + cmd.getInstallPath());
+        result = command.execute();
+        if (result != null) {
+            String errorString = "Error in linking  err=" + result;
+            s_logger.error(errorString);
+            return new CreateEntityDownloadURLAnswer(errorString, CreateEntityDownloadURLAnswer.RESULT_FAILURE);
+        }
+
         return new CreateEntityDownloadURLAnswer("", CreateEntityDownloadURLAnswer.RESULT_SUCCESS);
 
     }
