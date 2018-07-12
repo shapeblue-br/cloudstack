@@ -67,14 +67,14 @@ public class XenServerGuru extends HypervisorGuruBase implements HypervisorGuru,
     @Inject
     private VolumeDao _volumeDao;
     @Inject
-    private PrimaryDataStoreDao _storagePoolDao;
+    private PrimaryDataStoreDao storagePoolDao;
     @Inject
     private VolumeDataFactory _volFactory;
     @Inject
     private UserVmDao _userVmDao;
 
-    private static final ConfigKey<Integer> MaxNumberOfVCPUSPerVM = new ConfigKey<Integer>("Advanced", Integer.class, "xen.vm.vcpu.max", "16",
-            "Maximum number of VCPUs that VM can get in XenServer.", true, ConfigKey.Scope.Cluster);
+    private static final ConfigKey<Integer> MaxNumberOfVCPUSPerVM = new ConfigKey<Integer>("Advanced", Integer.class, "xen.vm.vcpu.max", "16", "Maximum number of VCPUs that VM can get in XenServer.",
+            true, ConfigKey.Scope.Cluster);
 
     @Override
     public HypervisorType getHypervisorType() {
@@ -130,7 +130,7 @@ public class XenServerGuru extends HypervisorGuruBase implements HypervisorGuru,
         // will simply lead to the SR that supports the root volume being removed
         if (volumes != null) {
             for (VolumeVO volume : volumes) {
-                StoragePoolVO storagePool = _storagePoolDao.findById(volume.getPoolId());
+                StoragePoolVO storagePool = storagePoolDao.findById(volume.getPoolId());
 
                 // storagePool should be null if we are expunging a volume that was never
                 // attached to a VM that was started (the "trick" for storagePool to be null
@@ -185,14 +185,14 @@ public class XenServerGuru extends HypervisorGuruBase implements HypervisorGuru,
             logger.debug("We are returning the default host to execute commands because the source and destination objects are not NFS type.");
             return defaultHostToExecuteCommands;
         }
-        boolean isSourceObjectSnapshotTypeAndDestinationObjectTemplateType = srcData.getObjectType() == DataObjectType.SNAPSHOT
-                && destData.getObjectType() == DataObjectType.TEMPLATE;
+        boolean isSourceObjectSnapshotTypeAndDestinationObjectTemplateType = srcData.getObjectType() == DataObjectType.SNAPSHOT && destData.getObjectType() == DataObjectType.TEMPLATE;
         if (!isSourceObjectSnapshotTypeAndDestinationObjectTemplateType) {
             logger.debug("We are returning the default host to execute commands because the source and destination objects are not snapshot and template respectively.");
             return defaultHostToExecuteCommands;
         }
         long snapshotId = srcData.getId();
-        HostVO hostCandidateToExecutedCommand = hostDao.findHostToOperateOnSnapshot(snapshotId);
+        StoragePoolVO storagePoolVO = storagePoolDao.findStoragePoolForSnapshot(snapshotId);
+        HostVO hostCandidateToExecutedCommand = hostDao.findHostToOperateOnSnapshotBasedOnStoragePool(storagePoolVO);
         hostDao.loadDetails(hostCandidateToExecutedCommand);
         String hypervisorVersion = hostCandidateToExecutedCommand.getHypervisorVersion();
         if (StringUtils.isBlank(hypervisorVersion)) {
@@ -207,8 +207,7 @@ public class XenServerGuru extends HypervisorGuruBase implements HypervisorGuru,
         String snapshotHotFixVersion = hostCandidateToExecutedCommand.getDetail(XenserverConfigs.XS620HotFix);
         boolean isXenServer620 = StringUtils.equals(hypervisorVersion, "6.2.0");
         if (isXenServer620 && !StringUtils.equalsIgnoreCase(XenserverConfigs.XSHotFix62ESP1004, snapshotHotFixVersion)) {
-            logger.debug(String.format(
-                    "We are returning the default host to execute commands because the hypervisor version is not 6.2.0 with hotfix ESP1004 [hypervisorVersion=%s, hotfixVersion=%s]",
+            logger.debug(String.format("We are returning the default host to execute commands because the hypervisor version is not 6.2.0 with hotfix ESP1004 [hypervisorVersion=%s, hotfixVersion=%s]",
                     hypervisorVersion, snapshotHotFixVersion));
             return defaultHostToExecuteCommands;
         }
