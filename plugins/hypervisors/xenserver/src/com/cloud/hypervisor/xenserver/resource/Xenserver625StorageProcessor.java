@@ -532,9 +532,9 @@ public class Xenserver625StorageProcessor extends XenServerStorageProcessor {
                     finalPath = folder + File.separator + snapshotBackupUuid;
                 }
             }
+            // remove every snapshot except this one from primary storage
             final String volumeUuid = snapshotTO.getVolume().getPath();
             destroySnapshotOnPrimaryStorageExceptThis(conn, volumeUuid, snapshotUuid);
-
             final SnapshotObjectTO newSnapshot = new SnapshotObjectTO();
             newSnapshot.setPath(finalPath);
             newSnapshot.setPhysicalSize(physicalSize);
@@ -547,12 +547,14 @@ public class Xenserver625StorageProcessor extends XenServerStorageProcessor {
             s_logger.info("New snapshot physical utilization: "+physicalSize);
 
             return new CopyCmdAnswer(newSnapshot);
-        } catch (final Types.XenAPIException e) {
-            details = "BackupSnapshot Failed due to " + e.toString();
-            s_logger.warn(details, e);
         } catch (final Exception e) {
-            details = "BackupSnapshot Failed due to " + e.getMessage();
             s_logger.warn(details, e);
+            final String reason = e instanceof Types.XenAPIException ? e.toString() : e.getMessage();
+            details = "BackupSnapshot Failed due to " + reason;
+            s_logger.warn(details, e);
+
+            // remove last bad primary snapshot when exception happens
+            destroySnapshotOnPrimaryStorage(conn, snapshotUuid);
         }
 
         return new CopyCmdAnswer(details);
