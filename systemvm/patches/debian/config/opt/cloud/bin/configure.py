@@ -979,7 +979,6 @@ def main(argv):
             logging.debug("Configuring dhcp entry")
             dhcp = CsDhcp("dhcpentry", config)
             dhcp.process()
-            CsHelper.service("cloud-early-config", "restart")
 
         if process_file in ["cmd_line.json", "load_balancer.json"]:
             logging.debug("Configuring load balancer")
