@@ -22,7 +22,6 @@ package com.cloud.agent.resource.virtualnetwork;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.channels.SocketChannel;
-import org.joda.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -36,6 +35,7 @@ import java.util.concurrent.locks.ReentrantLock;
 import javax.naming.ConfigurationException;
 
 import org.apache.log4j.Logger;
+import org.joda.time.Duration;
 
 import com.cloud.agent.api.Answer;
 import com.cloud.agent.api.CheckRouterAnswer;
@@ -161,14 +161,25 @@ public class VirtualRoutingResource {
     private ExecutionResult applyConfigToVR(String routerAccessIp, ConfigItem c, Duration timeout) {
         if (c instanceof FileConfigItem) {
             FileConfigItem configItem = (FileConfigItem)c;
+            s_logger.debug(String.format("Creating file [%s] in VR [%s] with content [%s]", configItem.getFilePath() + configItem.getFileName(), routerAccessIp, configItem.getFileContents()));
+            sleepApplyConfigToVR();
             return _vrDeployer.createFileInVR(routerAccessIp, configItem.getFilePath(), configItem.getFileName(), configItem.getFileContents());
         } else if (c instanceof ScriptConfigItem) {
             ScriptConfigItem configItem = (ScriptConfigItem)c;
+            s_logger.debug(String.format("Executing Script [%s] in VR [%s] with parameters [%s] and timeout [%s]", configItem.getScript(), routerAccessIp, configItem.getArgs(), timeout));
+            sleepApplyConfigToVR();
             return _vrDeployer.executeInVR(routerAccessIp, configItem.getScript(), configItem.getArgs(), timeout);
         }
         throw new CloudRuntimeException("Unable to apply unknown configitem of type " + c.getClass().getSimpleName());
     }
 
+    private void sleepApplyConfigToVR() {
+        try {
+            Thread.sleep(3000);
+        } catch (InterruptedException e) {
+            s_logger.debug("Error while sleeping in method [applyConfigToVR].", e);
+        }
+    }
 
     private Answer applyConfig(NetworkElementCommand cmd, List<ConfigItem> cfg) {
 
@@ -262,7 +273,7 @@ public class VirtualRoutingResource {
 
     public boolean configureHostParams(final Map<String, String> params) {
         if (_params.get("router.aggregation.command.each.timeout") == null) {
-            String value = (String)params.get("router.aggregation.command.each.timeout");
+            String value = params.get("router.aggregation.command.each.timeout");
             _eachTimeout = Duration.standardSeconds(NumbersUtil.parseInt(value, 10));
         }
 
